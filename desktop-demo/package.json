@@ -1,0 +1,16 @@
+{
+  "name": "nexus-device-dashboard-demo",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Multi-brand device dashboard architecture demo",
+  "main": "main.cjs",
+  "scripts": {
+    "start": "electron .",
+    "test": "node --test device-service.test.cjs",
+    "build:win": "electron-packager . NEXUS --platform=win32 --arch=x64 --out=../release --overwrite --asar"
+  },
+  "devDependencies": {
+    "@electron/packager": "20.3.0",
+    "electron": "45.2.1"
+  }
+}
