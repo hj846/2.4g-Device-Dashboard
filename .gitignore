@@ -5,3 +5,5 @@ release/
 *.exe
 *.zip
 .DS_Store
+measurements/
+resources/research/

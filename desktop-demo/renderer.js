@@ -1,120 +1,107 @@
-const $ = id => document.getElementById(id);
 const icons = {
+  XIAOMI: './assets/xiaomi.png',
+  MORKBLADE: './assets/morkblade.ico',
+  HYPERX: './assets/hyperx.svg',
+  ATK: './assets/atk.ico',
+  RAPOO: './assets/rapoo.svg',
+  AULA: './assets/aula.ico',
+  MCHOSE: './assets/mchose.png',
   LOGITECH: './assets/logitech.png',
   KEYCHRON: './assets/keychron.png',
   STEELSERIES: './assets/steelseries-hires.png',
   RAZER: './assets/razer.png'
 };
-const filters = ['全部设备', '需要关注', '已断开'];
-let snapshot = { scenarioName: '加载中', devices: [] };
-let filter = '全部设备';
-let currentId = null;
-
-function notify(message) {
-  $('toast').textContent = message;
-  $('toast').hidden = false;
-  clearTimeout(window.toastTimer);
-  window.toastTimer = setTimeout(() => { $('toast').hidden = true; }, 2600);
+const $=id=>document.getElementById(id);
+const esc=v=>String(v??'').replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+let snapshot={devices:[],scanning:true},filter='on',selected=null;
+let deviceColors={};
+try{const saved=JSON.parse(localStorage.getItem('nexus.deviceColors')||'{}');if(saved&&typeof saved==='object'&&!Array.isArray(saved))deviceColors=saved}catch{}
+const colorKey=d=>JSON.stringify([d.brandKey,d.id,window.deviceArtwork.find(d)]);
+const artworkKey=d=>JSON.stringify([d.brandKey||d.brand||'',d.model||'',d.kind||''].map(s=>String(s).trim().toLowerCase().replace(/\s+/g,' ')));
+let customArtwork={},uploading=false;
+const failedPictures=new Set();
+function genericPicture(d){
+ const kind=/键盘|keyboard/i.test(d.kind)?'keyboard':/音响|音箱|扬声器|speaker/i.test(d.kind)?'speaker':/耳机|耳麦|headset|headphone/i.test(d.kind)?'headset':'mouse';
+ return {src:'assets/products/generic/'+kind+'.png',generic:true,note:'通用示意图 · 点击上传真实展示图'};
 }
-
-function signalLabel(value) { return ['无信号', '很弱', '偏弱', '良好', '强'][value] || '未知'; }
-function signalDots(value) {
-  return `<span class="dots ${value > 0 && value < 3 ? 'weak' : ''}" aria-label="信号 ${value} 格">${[0, 1, 2, 3].map(index => `<i class="${index < value ? 'on' : ''}"></i>`).join('')}</span>`;
+const colorNames={Black:'黑色',White:'白色',Blue:'蓝色',Lilac:'淡紫色',Mint:'薄荷绿',Magenta:'品红色',Fluorescent_Yellow:'炽光黄',Lava_Red:'熔岩红',Raspberry_Pink:'树莓粉',Flame_Orange:'焰影橙',Ice_Berry_Pink:'冰莓粉',Morning_Mist_Blue:'晨雾蓝',Metallic_Iridescent:'幻境蓝'};
+function colorName(value){return colorNames[value]||colorNames[value[0]?.toUpperCase()+value.slice(1)]||value.replaceAll('_',' ')}
+function picture(d){
+ const custom=customArtwork[artworkKey(d)];
+ if(custom&&!failedPictures.has(custom))return {src:custom,custom:true,note:'自定义展示图 · 点击更换'};
+ const official=window.deviceArtwork.find(d);
+ if(official&&!failedPictures.has(official)){
+  const colors=window.deviceArtwork.colors(d);
+  const choice=colors.find(c=>c.src===deviceColors[colorKey(d)])||colors.find(c=>c.src===official)||colors[0];
+  if(failedPictures.has(choice?.src))return genericPicture(d);
+  return {src:choice?.src||official,switchable:colors.length>1,note:(colors.length>1?colorName(choice.color)+' · ':'')+'点击图片上传展示图'};
+ }
+ if(/basilisk x hyperspeed/i.test(d.model)&&!failedPictures.has('assets/products/basilisk.png'))return {src:'assets/products/basilisk.png',note:''};
+ return genericPicture(d);
 }
-
-function card(device) {
-  const battery = device.battery;
-  const batteryStyle = battery === null ? 'depleted' : battery < 25 ? 'low' : '';
-  const statusStyle = device.status === '已断开' ? 'off' : device.status === '需要关注' ? 'warn' : '';
-  const iconStyle = device.brand === 'RAZER' || device.brand === 'steelseries' ? 'soft' : '';
-  return `<article class="device" data-id="${device.id}" tabindex="0" role="button" aria-label="查看 ${device.model} 设备详情">
-    <div class="card-head"><div class="logo ${iconStyle}"><img src="${iconFor(device.brand)}" alt="${device.brand} 标识"></div>
-      <div><div class="brand">${device.brand}</div><div class="device-name">${device.model}</div></div>
-      <div class="status ${statusStyle}">${device.status}</div></div>
-    <div class="divider"></div>
-    <div class="metrics">
-      <div><div class="metric-label">电量</div><div class="metric-value"><span class="battery ${batteryStyle}" style="--level:${battery ?? 0}%"><span class="battery-fill"></span></span>${battery === null ? '未知' : `${battery}%`}</div></div>
-      <div><div class="metric-label">信号</div><div class="metric-value">${signalDots(device.signal)}<span>${signalLabel(device.signal)}</span></div></div>
-      <div><div class="metric-label">连接方式</div><div class="metric-value connection" title="${device.connection}">${device.connection}</div></div>
-    </div>
-    <div class="card-foot"><span>最近同步 · ${device.updated}</span><span class="open">查看详情 ↗</span></div>
-  </article>`;
+// Preserve existing elements during live updates so animations and images do not restart.
+function updateMarkup(container,html){
+ const template=document.createElement('template');template.innerHTML=html;
+ function patch(parent,next){
+  for(let i=0;i<next.childNodes.length;i++){
+   const incoming=next.childNodes[i],current=parent.childNodes[i];
+   if(!current){parent.appendChild(incoming.cloneNode(true));continue}
+   if(current.nodeType!==incoming.nodeType||current.nodeName!==incoming.nodeName){current.replaceWith(incoming.cloneNode(true));continue}
+   if(current.nodeType===Node.TEXT_NODE){if(current.nodeValue!==incoming.nodeValue)current.nodeValue=incoming.nodeValue;continue}
+   if(current.nodeType===Node.ELEMENT_NODE){
+    for(const attr of Array.from(current.attributes))if(!incoming.hasAttribute(attr.name))current.removeAttribute(attr.name);
+    for(const attr of incoming.attributes)if(current.getAttribute(attr.name)!==attr.value)current.setAttribute(attr.name,attr.value);
+    patch(current,incoming);
+   }
+  }
+  while(parent.childNodes.length>next.childNodes.length)parent.lastChild.remove();
+ }
+ patch(container,template.content);
 }
-
-function iconFor(brand) {
-  return ({ 'logitech G': icons.LOGITECH, Keychron: icons.KEYCHRON, steelseries: icons.STEELSERIES, RAZER: icons.RAZER })[brand];
+let renderedDevice=null;
+const listed=()=>snapshot.devices.filter(d=>(d.connected===true)===(filter==='on'));
+function render(){
+ const ds=listed();if(!ds.some(d=>d.id===selected))selected=ds[0]?.id;
+ const index=ds.findIndex(d=>d.id===selected),d=ds[index];
+ const previousFocus=document.activeElement?.dataset.device;
+ const scroll=$('strip').scrollLeft;
+ if(d){
+ const pic=picture(d),sig=Number.isInteger(d.signal)?['无信号','很弱','偏弱','良好','强'][d.signal]:'未知';
+ const heroMarkup='<div class="info '+(d.connected?'':'offline')+'"><div class="identity">'+(icons[d.brandKey]?'<img class="brand-logo" src="'+icons[d.brandKey]+'" alt="">':'')+'<div><p class="brand">'+esc(d.brand)+'</p><h2>'+esc(d.model)+'</h2><p class="kind">'+esc(d.kind)+'</p><div class="status"><i class="dot"></i>'+esc(d.status||'状态待确认')+'</div></div></div><div class="metrics">'+(d.isWired?'':'<div class="metric"><small>电量</small><strong>'+(d.battery==null?'未知':'<span class="battery" style="--level:'+Number(d.battery)+'%"><i></i></span>'+Number(d.battery)+'%')+'</strong></div>')+'<div class="metric"><small>连接方式</small><strong>'+esc(d.connection)+'</strong></div>'+(d.isWired?'':'<div class="metric"><small>信号</small><strong>'+esc(sig)+'</strong></div>')+'</div><p class="updated">最近同步 · '+esc(d.updated||'刚刚')+'</p></div><div class="visual '+(pic.custom?'custom-visual ':'')+(d.brandKey==='LOGITECH'?'logitech-visual ':d.brandKey==='MORKBLADE'?'morkblade-visual ':'')+(!pic.generic&&!pic.custom&&/official|basilisk/.test(pic.src)?(/键盘|keyboard/i.test(d.kind)?'keyboard-stage':/耳机|headset/i.test(d.kind)?'headset-stage':'mouse-stage'):'')+'">'+'<button class="product-switch" type="button" aria-label="'+esc(pic.note)+'" title="'+esc(pic.note)+'">'+'<img class="product" src="'+esc(pic.src)+'" alt="'+esc(d.model)+'">'+'</button>'+(pic.switchable?'<button class="color-switch" type="button">切换配色</button>':'')+'<span class="visual-note">'+esc(pic.note)+'</span></div>';
+ if(renderedDevice===d.id)updateMarkup($('hero'),heroMarkup);else $('hero').innerHTML=heroMarkup;
+ renderedDevice=d.id;
+ }else {renderedDevice=null;updateMarkup($('hero'),'<div class="empty">'+(snapshot.scanning?'正在识别设备…':'当前筛选下没有设备')+'</div>');}
+ updateMarkup($('strip'),ds.map(x=>'<button class="tile" data-device="'+esc(x.id)+'" aria-pressed="'+(x.id===selected)+'"><img class="thumb" src="'+picture(x).src+'" alt=""><div><small>'+esc(x.brand)+'</small><b title="'+esc(x.model)+'">'+esc(x.model)+'</b><span class="tile-power">'+(x.isWired?'有线连接':'<span class="battery" aria-hidden="true" style="--level:'+(x.battery==null?0:Math.max(0,Math.min(100,Number(x.battery))))+'%"><i></i></span>'+(x.battery==null?'电量未知':Number(x.battery)+'%'))+'</span></div></button>').join(''));
+ $('strip').scrollLeft=scroll;
+ $('strip').querySelectorAll('button').forEach(b=>{b.onclick=()=>select(b.dataset.device);if(b.dataset.device===previousFocus)b.focus({preventScroll:true})});
+ document.querySelectorAll('.product,.thumb').forEach(img=>{img.onerror=()=>{const source=img.getAttribute('src');if(source.includes('/generic/'))return;failedPictures.add(source);render()}});
+ $('prev').disabled=index<=0;$('next').disabled=index<0||index>=ds.length-1;
+ $('position').textContent=(index<0?'00':String(index+1).padStart(2,'0'))+' / '+String(ds.length).padStart(2,'0');
+ $('scanStatus').textContent=snapshot.error||(snapshot.scanning?'正在更新设备状态…':'本机设备 · 状态随设备上报更新');
 }
-
-function render() {
-  const devices = snapshot.devices;
-  const connected = devices.filter(device => device.status !== '已断开').length;
-  const attention = devices.filter(device => device.status === '需要关注').length;
-  $('overview').innerHTML = `
-    <div class="summary"><div class="summary-label">在线设备</div><div class="summary-line"><span class="summary-value">${connected} / ${devices.length}</span><span class="summary-note">跨品牌统一显示</span></div></div>
-    <div class="summary"><div class="summary-label">需要关注</div><div class="summary-line"><span class="summary-value">${attention}</span><span class="summary-note">电量或信号偏低</span></div></div>
-    <div class="summary"><div class="summary-label">当前场景</div><div class="summary-line"><span class="summary-value" style="font-size:25px">${snapshot.scenarioName}</span><span class="summary-note">演示模式</span></div></div>`;
-  $('filters').innerHTML = filters.map(name => `<button class="filter ${name === filter ? 'active' : ''}" data-filter="${name}">${name}</button>`).join('');
-  $('filters').querySelectorAll('button').forEach(button => {
-    button.onclick = () => { filter = button.dataset.filter; render(); };
-  });
-  const shown = devices.filter(device => filter === '全部设备' || device.status === filter);
-  $('count').textContent = `${shown.length} 台`;
-  $('deviceGrid').innerHTML = shown.length ? shown.map(card).join('') : `<div class="empty"><strong>${devices.length ? '当前筛选下没有设备' : '尚未发现设备'}</strong><p>切换演示场景可预览其他状态</p></div>`;
-  $('deviceGrid').querySelectorAll('.device').forEach(element => {
-    element.onclick = () => openDetail(element.dataset.id);
-    element.onkeydown = event => {
-      if (event.key === 'Enter' || event.key === ' ') { event.preventDefault(); openDetail(element.dataset.id); }
-    };
-  });
+function select(id){selected=id;render();$('strip').querySelector('[aria-pressed=true]')?.scrollIntoView({behavior:'smooth',block:'nearest',inline:'nearest'})}
+function cycleColor(){
+ const d=listed().find(d=>d.id===selected);if(!d)return;
+ const colors=window.deviceArtwork.colors(d);if(colors.length<2)return;
+ const i=colors.findIndex(c=>c.src===picture(d).src);
+ deviceColors[colorKey(d)]=colors[(i+1)%colors.length].src;
+ try{localStorage.setItem('nexus.deviceColors',JSON.stringify(deviceColors))}catch{}
+ render();
 }
-
-function openDetail(id) {
-  const device = snapshot.devices.find(item => item.id === id);
-  if (!device) return;
-  currentId = id;
-  $('detailBrand').textContent = device.brand;
-  $('detailTitle').textContent = device.model;
-  $('detailSubtitle').textContent = `${device.kind} · ${device.status}`;
-  $('detailGrid').innerHTML = [
-    ['电量', device.battery === null ? '未知' : `${device.battery}%`],
-    ['信号', signalLabel(device.signal)],
-    ['连接', device.connection]
-  ].map(([name, value]) => `<div class="detail-cell"><small>${name}</small><strong>${value}</strong></div>`).join('');
-  const supportsDpi = device.capabilities.includes('dpi');
-  const canWrite = supportsDpi && device.status !== '已断开';
-  $('detailSection').innerHTML = supportsDpi ? `
-    <h3>DPI 档位</h3><p>${canWrite ? '通过模拟设备适配器写入；关闭程序后恢复初始值。' : '设备已断开，当前无法切换。'}</p>
-    <div class="dpi-list">${[800, 1200, 1600, 2400].map(value => `<button data-dpi="${value}" ${canWrite ? '' : 'disabled'} class="${value === device.dpi ? 'active' : ''}">${value} DPI</button>`).join('')}</div>`
-    : '<h3>设备设置</h3><p>该型号暂不提供 DPI 调整能力。</p>';
-  $('detailSection').querySelectorAll('[data-dpi]').forEach(button => {
-    button.onclick = async () => {
-      try {
-        await window.deviceAPI.setDpi(id, Number(button.dataset.dpi));
-        notify(`已切换至 ${button.dataset.dpi} DPI · 模拟设备`);
-      } catch (error) { notify(error.message); }
-    };
-  });
-  $('overlay').hidden = false;
-  $('closeButton').focus();
+async function uploadArtwork(){
+ const d=listed().find(d=>d.id===selected);if(!d||uploading)return;
+ uploading=true;
+ try{const result=await window.deviceAPI.chooseArtwork(d.id);if(result){customArtwork[result.key]=result.src;failedPictures.delete(result.src);render()}}
+ catch(error){$('scanStatus').textContent='展示图上传失败：'+error.message}
+ finally{uploading=false}
 }
-
-$('closeButton').onclick = () => { $('overlay').hidden = true; currentId = null; };
-$('overlay').onclick = event => { if (event.target === $('overlay')) $('closeButton').click(); };
-document.onkeydown = event => { if (event.key === 'Escape') $('closeButton').click(); };
-$('scenarioButton').onclick = async () => {
-  try {
-    filter = '全部设备';
-    $('closeButton').click();
-    snapshot = await window.deviceAPI.nextScenario();
-    render();
-  } catch (error) { notify(error.message); }
-};
-document.querySelectorAll('.icon-button, .brand-pill').forEach(button => {
-  if (!button.id) button.onclick = () => notify('此处为界面演示，功能将在后续加入');
-});
-window.deviceAPI.onChanged(next => {
-  snapshot = next;
-  render();
-  if (currentId) openDetail(currentId);
-});
-window.deviceAPI.snapshot().then(next => { snapshot = next; render(); }).catch(error => notify(error.message));
+$('hero').addEventListener('click',e=>{if(e.target.closest('.color-switch'))cycleColor();else if(e.target.closest('.product-switch'))uploadArtwork()});
+function move(step){const ds=listed(),i=ds.findIndex(d=>d.id===selected);if(ds[i+step])select(ds[i+step].id)}
+$('prev').onclick=()=>move(-1);$('next').onclick=()=>move(1);
+document.querySelectorAll('[data-filter]').forEach(b=>b.onclick=()=>{filter=b.dataset.filter;document.querySelectorAll('[data-filter]').forEach(x=>x.setAttribute('aria-pressed',x===b));render()});
+$('settings').onclick=()=>$('preferences').showModal();
+document.addEventListener('keydown',e=>{if($('preferences').open)return;if(e.key==='ArrowRight'){e.preventDefault();move(1)}if(e.key==='ArrowLeft'){e.preventDefault();move(-1)}});
+window.deviceAPI.onChanged(next=>{snapshot=next;render()});
+window.deviceAPI.snapshot().then(next=>{snapshot=next;render()}).catch(()=>{$('scanStatus').textContent='设备读取失败，请重新启动应用'});
+render();
+window.deviceAPI.artwork?.().then(saved=>{customArtwork={...saved,...customArtwork};render()}).catch(()=>{});
